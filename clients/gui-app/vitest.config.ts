@@ -5,6 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { transformWithOxc } from "vite";
 import { defineConfig } from "vitest/config";
+import { NODE_ENV_FILES } from "./node-env-files";
 
 const availableParallelism =
   typeof os.availableParallelism === "function"
@@ -220,23 +221,19 @@ export default defineConfig({
       "./__tests__/test-browser-apis.ts",
     ],
     sequence: { setupFiles: "list" },
-    include: [
-      "__tests__/**/*.test.ts",
-      "__tests__/**/*.test.tsx",
-      "src/**/__tests__/**/*.test.ts",
-      "src/**/__tests__/**/*.test.tsx",
-    ],
     globals: false,
     projects: [
       {
         extends: true,
         test: {
           name: "jsdom",
-          exclude: [
-            "src/lib/**/*.test.ts",
-            "src/stores/**/*.test.ts",
-            "src/editor-core/**/*.test.ts",
+          include: [
+            "__tests__/**/*.test.ts",
+            "__tests__/**/*.test.tsx",
+            "src/**/__tests__/**/*.test.ts",
+            "src/**/__tests__/**/*.test.tsx",
           ],
+          exclude: ["**/node_modules/**", ...NODE_ENV_FILES],
         },
       },
       {
@@ -244,11 +241,7 @@ export default defineConfig({
         test: {
           name: "node",
           environment: "node",
-          include: [
-            "src/lib/**/__tests__/**/*.test.ts",
-            "src/stores/**/__tests__/**/*.test.ts",
-            "src/editor-core/**/__tests__/**/*.test.ts",
-          ],
+          include: NODE_ENV_FILES,
         },
       },
     ],
