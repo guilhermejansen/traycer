@@ -208,7 +208,7 @@ jobs:
       # Serially at the end of gui-app shard 1 they took this required check
       # from about 7 minutes to about 35.
       - name: Test
-        run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --outputStyle=stream ${{ matrix.test_args }} --sequence.shuffle.files --sequence.seed=${{ github.run_id }}
+        run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --outputStyle=stream ${{ matrix.test_args }}
       # Diagnostics for the gui-app shard flake: shards die with every visible
       # test passing, a log truncated mid-write, and exit 1 with no vitest
       # failure summary — the signature of the runner killing the process, not

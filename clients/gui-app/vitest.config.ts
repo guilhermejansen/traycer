@@ -227,6 +227,31 @@ export default defineConfig({
       "src/**/__tests__/**/*.test.tsx",
     ],
     globals: false,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "jsdom",
+          exclude: [
+            "src/lib/**/*.test.ts",
+            "src/stores/**/*.test.ts",
+            "src/editor-core/**/*.test.ts",
+          ],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "node",
+          environment: "node",
+          include: [
+            "src/lib/**/__tests__/**/*.test.ts",
+            "src/stores/**/__tests__/**/*.test.ts",
+            "src/editor-core/**/__tests__/**/*.test.ts",
+          ],
+        },
+      },
+    ],
     pool: "forks",
     isolate: false,
     // A few suites advance large fake-timer windows. Limiting concurrently
