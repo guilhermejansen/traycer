@@ -2192,6 +2192,22 @@ type GatedChatSend = {
   readonly refusal: () => string | null;
 };
 
+// What the rebind gate did with a send: dispatched it (accepted or refused
+// at once), or armed the teardown dialog, in which case `accepted` settles
+// with the dialog - `true` once "Send and switch" dispatched it, `false` on
+// dismiss or when the armed send is dropped. The composer keeps its text
+// until then and clears only on `true`.
+type GatedChatSendOutcome =
+  | { readonly kind: "dispatched"; readonly accepted: boolean }
+  | { readonly kind: "armed"; readonly accepted: Promise<boolean> };
+
+// An armed send with the settle of its promised outcome. Re-arming after a
+// drift re-disclosure keeps the same settle: the composer asked once.
+type ArmedChatSend = {
+  readonly send: GatedChatSend;
+  readonly settle: (accepted: boolean) => void;
+};
+
 // The composer submit's own eligibility (access + sign-in) is re-checked
 // live by the dialog's confirm handler itself, so its slot carries the
 // always-eligible refusal. Module scope for a stable identity.
@@ -3276,7 +3292,7 @@ function useChatTileSessionViewModel(
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly holders: readonly WorktreeBusyHolder[];
   } | null>(null);
-  const pendingSubmitRef = useRef<ArmedTeardownSubmit<GatedChatSend> | null>(
+  const pendingSubmitRef = useRef<ArmedTeardownSubmit<ArmedChatSend> | null>(
     null,
   );
   const [teardownOwnerId, setTeardownOwnerId] = useState(node.id);
@@ -3285,6 +3301,9 @@ function useChatTileSessionViewModel(
     setTeardownDialog(null);
   }
   useEffect(() => {
+    // A send armed for the previous chat is dropped, and the composer that
+    // waits on it hears so, keeping its text.
+    pendingSubmitRef.current?.input.settle(false);
     pendingSubmitRef.current = null;
   }, [node.id]);
 
@@ -3346,8 +3365,12 @@ function useChatTileSessionViewModel(
   // reopens one of two holes: a phantom disclosure on a no-op draft, or a
   // staged rebind committing silently.
   const submitThroughRebindGate = useCallback(
-    (send: GatedChatSend): boolean => {
+    (send: GatedChatSend): GatedChatSendOutcome => {
       const { submit, dispatch } = send;
+      const dispatched = (): GatedChatSendOutcome => ({
+        kind: "dispatched",
+        accepted: dispatch(submit),
+      });
       const stagedKey: WorktreeStagingKey = {
         surface: "owner",
         hostId: activeHostId,
@@ -3366,7 +3389,7 @@ function useChatTileSessionViewModel(
           removedWorkspacePaths: [],
         })
       ) {
-        return dispatch(submit);
+        return dispatched();
       }
       const snapshot = snapshotTeardownHolders(
         droppedRunDirectoriesFromDraft({
@@ -3383,15 +3406,19 @@ function useChatTileSessionViewModel(
         stopTargets: snapshot.stopTargets,
       };
       if (snapshot.holders.length > 0) {
+        let settle: (accepted: boolean) => void = () => undefined;
+        const accepted = new Promise<boolean>((resolve) => {
+          settle = resolve;
+        });
         pendingSubmitRef.current = {
-          input: send,
+          input: { send, settle },
           capture,
           ownerId: node.id,
         };
         setTeardownDialog({ holders: snapshot.holders });
-        return false;
+        return { kind: "armed", accepted };
       }
-      return dispatch(submit);
+      return dispatched();
     },
     [
       activeHostId,
@@ -3408,7 +3435,7 @@ function useChatTileSessionViewModel(
     target: props.restingSandbox ?? null,
   });
   const submitMessage = useCallback(
-    (input: ChatComposerSubmitInput): boolean => {
+    (input: ChatComposerSubmitInput): boolean | Promise<boolean> => {
       if (profile === null) return false;
       if (activeEditingQueueItemId !== null) {
         if (!canAct) return false;
@@ -3444,11 +3471,13 @@ function useChatTileSessionViewModel(
       if (props.restingSandbox !== undefined)
         return submitBoundSandboxMessage(input);
       if (!canAct) return false;
+      // Armed behind the folder dialog, the composer gets the promise and
+      // clears its text only once "Send and switch" dispatches the send.
       return submitThroughRebindGate({
         submit: input,
         dispatch: dispatchUserSend,
         refusal: NO_LIVE_SEND_REFUSAL,
-      });
+      }).accepted;
     },
     [
       activeEditingQueueItemId,
@@ -3596,7 +3625,9 @@ function useChatTileSessionViewModel(
         plainTextPromptContent(option.prompt),
         slashCatalog,
       );
-      return submitThroughRebindGate({
+      // An armed send is not yet a send: the click reports as not sent and
+      // the dialog's confirm dispatches it.
+      const outcome = submitThroughRebindGate({
         submit: {
           content,
           contentText: option.prompt,
@@ -3609,6 +3640,7 @@ function useChatTileSessionViewModel(
         dispatch: dispatchUserSend,
         refusal: nextStepSendRefusal,
       });
+      return outcome.kind === "dispatched" && outcome.accepted;
     },
     [
       canSendNextStep,
@@ -3756,7 +3788,7 @@ function useChatTileSessionViewModel(
       plainTextPromptContent("Implement the plan above."),
       slashCatalog,
     );
-    return submitThroughRebindGate({
+    const outcome = submitThroughRebindGate({
       submit: {
         content,
         contentText: "Implement the plan above.",
@@ -3769,6 +3801,7 @@ function useChatTileSessionViewModel(
       dispatch: dispatchUserSend,
       refusal: nextStepSendRefusal,
     });
+    return outcome.kind === "dispatched" && outcome.accepted;
   }, [
     canSendNextStep,
     dispatchUserSend,
@@ -4362,7 +4395,8 @@ function useChatTileSessionViewModel(
         // taking the armed submit so a refusal keeps the dialog and its
         // armed send (and the staged draft — consent was for a send that
         // did not happen), matching the access refusals above.
-        const armedRefusal = pendingSubmitRef.current?.input.refusal() ?? null;
+        const armedRefusal =
+          pendingSubmitRef.current?.input.send.refusal() ?? null;
         if (armedRefusal !== null) {
           toast(armedRefusal);
           return;
@@ -4370,6 +4404,7 @@ function useChatTileSessionViewModel(
         const armed = takeArmedTeardownSubmit(pendingSubmitRef);
         if (armed === null) return;
         if (armed.ownerId !== node.id) {
+          armed.input.settle(false);
           setTeardownDialog(null);
           return;
         }
@@ -4416,9 +4451,12 @@ function useChatTileSessionViewModel(
           return;
         }
         setTeardownDialog(null);
-        armed.input.dispatch(armed.input.submit);
+        // Settled with the dispatch's own answer: a send the store refused is
+        // reported as not sent, so the composer keeps its text for it.
+        armed.input.settle(armed.input.send.dispatch(armed.input.send.submit));
       },
       onDismiss: () => {
+        pendingSubmitRef.current?.input.settle(false);
         pendingSubmitRef.current = null;
         setTeardownDialog(null);
       },
